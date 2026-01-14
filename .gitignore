@@ -2,3 +2,4 @@ config.py
 __pycache__/
 *.py[cod]
 controld_backup_*
+old/
