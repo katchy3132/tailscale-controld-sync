@@ -10,7 +10,7 @@ import json
 import argparse
 from datetime import datetime
 from typing import List, Dict
-
+ 
 # Import configuration
 try:
     from config import (
@@ -74,16 +74,73 @@ def get_tailscale_services() -> List[Dict]:
     """Fetch all Tailscale services."""
     url = f"{TAILSCALE_API_BASE}/tailnet/{TAILSCALE_TAILNET_ID}/services"
     headers = {'Authorization': f'Bearer {TAILSCALE_API_KEY}'}
-    
+
     try:
         response = requests.get(url, headers=headers)
         response.raise_for_status()
-        services = response.json().get('services', [])
-        print(f"✓ Found {len(services)} Tailscale services")
+        services = response.json().get('vipServices', [])
+        print(f"✓ Found {len(services)} Tailscale services ")
+        for svc in services:
+            orig_name = svc.get('name', '')
+            # Use the canonical name after the ':' if present, otherwise keep original
+            svc['name'] = orig_name.partition(':')[2] or orig_name
+            addrs = svc.get('addrs', [])
+            addr = addrs[0] if addrs else ''
+            # print(f"  Service: {svc.get('name')} -> {addr}")
         return services
     except requests.exceptions.RequestException as e:
         print(f"Error fetching Tailscale services: {e}")
         sys.exit(1)
+
+
+def get_tailscale_records() -> Dict[str, str]:
+    """Fetch Tailscale nodes & services and build the desired DNS records map.
+
+    Returns a dict mapping hostname -> ip.
+    """
+    desired_records: Dict[str, str] = {}
+
+    # Fetch nodes and services
+    tailscale_nodes = get_tailscale_nodes()
+    tailscale_services = get_tailscale_services()
+
+    # Add nodes
+    for node in tailscale_nodes:
+        raw_name = node.get('name', '')
+        device_name = raw_name.split('.', 1)[0].lower() if raw_name else ''
+        ip = node.get('addresses', [''])[0]  # Get first IP (usually IPv4)
+
+        if not device_name or not ip:
+            continue
+
+        if CREATE_BARE_HOSTNAME:
+            desired_records[device_name] = ip
+
+        for suffix in DNS_SUFFIXES:
+            suffix = suffix.strip()
+            if suffix:
+                fqdn = f"{device_name}.{suffix}"
+                desired_records[fqdn] = ip
+
+    # Add services
+    for service in tailscale_services:
+        service_name = service.get('name', '').lower()
+        addrs = service.get('addrs', [])
+        ip = addrs[0] if addrs else ''
+
+        if not service_name or not ip:
+            continue
+
+        if CREATE_BARE_HOSTNAME:
+            desired_records[service_name] = ip
+
+        for suffix in DNS_SUFFIXES:
+            suffix = suffix.strip()
+            if suffix:
+                fqdn = f"{service_name}.{suffix}"
+                desired_records[fqdn] = ip
+
+    return desired_records
 
 
 def get_controld_records(folder_id: str) -> List[Dict]:
@@ -96,36 +153,39 @@ def get_controld_records(folder_id: str) -> List[Dict]:
         response.raise_for_status()
         rules = response.json().get('body', {}).get('rules', [])
         
-        print(f"✓ Found {len(rules)} existing rules in '{CONTROLD_FOLDER_NAME}' folder")
+        print(f"✓ Found {len(rules)} existing rules in ControlD '{CONTROLD_FOLDER_NAME}' folder")
         return rules
     except requests.exceptions.RequestException as e:
         print(f"Error fetching ControlD rules: {e}")
         sys.exit(1)
 
 
-def get_or_create_folder() -> str:
+def get_or_create_controld_rules_folder() -> str:
     """Get the folder ID for the Tailscale folder, creating it if necessary."""
-    url = f"{CONTROLD_API_BASE}/profiles/{CONTROLD_PROFILE_ID}/folders"
+    url = f"{CONTROLD_API_BASE}/profiles/{CONTROLD_PROFILE_ID}/groups"
     headers = {'Authorization': f'Bearer {CONTROLD_API_TOKEN}'}
     
     try:
         # Get existing folders
         response = requests.get(url, headers=headers)
         response.raise_for_status()
-        folders = response.json().get('body', {}).get('folders', [])
-        
-        # Check if folder exists
-        for folder in folders:
-            if folder.get('name') == CONTROLD_FOLDER_NAME:
+        groups = response.json().get('body', {}).get('groups', [])
+
+        # Check if folder exists. ControlD response uses 'group' for the name.
+        for group in groups:
+            group_name = group.get('group') or group.get('name') or ''
+            if group_name and group_name.lower() == CONTROLD_FOLDER_NAME.lower():
+                pk = group.get('PK')
                 print(f"✓ Found existing folder: {CONTROLD_FOLDER_NAME}")
-                return folder.get('PK')
-        
+                return pk
+
         # Create folder if it doesn't exist
         print(f"Creating folder: {CONTROLD_FOLDER_NAME}")
+        # ControlD expects 'group' when creating a folder
         response = requests.post(
             url,
             headers={**headers, 'Content-Type': 'application/json'},
-            json={'name': CONTROLD_FOLDER_NAME}
+            json={'group': CONTROLD_FOLDER_NAME}
         )
         response.raise_for_status()
         folder_id = response.json().get('body', {}).get('folder', {}).get('PK')
@@ -241,80 +301,41 @@ def sync_dns_records(dry_run: bool = True):
     
     # Validate configuration
     validate_config()
+
     
     # Get or create folder
-    folder_id = get_or_create_folder()
+    folder_id = get_or_create_controld_rules_folder()
     
-    # Get Tailscale nodes and services
-    tailscale_nodes = get_tailscale_nodes()
-    tailscale_services = get_tailscale_services()
+    # Build desired DNS records from Tailscale nodes and services
+    desired_records = get_tailscale_records()
     
     # Get existing ControlD rules in our folder
     existing_rules = get_controld_records(folder_id)
-    
+    for rule in existing_rules:
+        print(f"  Existing rule: {rule.get('PK')} -> {rule.get('action', {}).get('via', '')}")
+        
+        
     # Create backup before making changes (only in live mode)
     if not dry_run and existing_rules:
         create_backup(existing_rules, folder_id)
-    
-    # Build desired DNS records from Tailscale nodes
-    desired_records = {}
-    
-    # Add nodes
-    for node in tailscale_nodes:
-        # Use 'name' field which is the device name, not 'hostname'
-        device_name = node.get('name', '').lower()
-        ip = node.get('addresses', [''])[0]  # Get first IP (usually IPv4)
-        
-        if not device_name or not ip:
-            continue
-        
-        # Create record without suffix (just device name) if enabled
-        if CREATE_BARE_HOSTNAME:
-            desired_records[device_name] = ip
-        
-        # Create records for each suffix
-        for suffix in DNS_SUFFIXES:
-            suffix = suffix.strip()
-            if suffix:
-                fqdn = f"{device_name}.{suffix}"
-                desired_records[fqdn] = ip
-    
-    # Add services
-    for service in tailscale_services:
-        # Use 'name' field for services as well
-        service_name = service.get('name', '').lower()
-        ip = service.get('ip', '')
-        
-        if not service_name or not ip:
-            continue
-        
-        # Create record without suffix (just service name) if enabled
-        if CREATE_BARE_HOSTNAME:
-            desired_records[service_name] = ip
-        
-        # Create records for each suffix
-        for suffix in DNS_SUFFIXES:
-            suffix = suffix.strip()
-            if suffix:
-                fqdn = f"{service_name}.{suffix}"
-                desired_records[fqdn] = ip
-    
+      
     print(f"\n✓ Generated {len(desired_records)} desired DNS records")
+    # for hostname, ip in desired_records.items():
+    #     print(f"  • {hostname} → {ip}")
     
     # Build map of existing rules in our folder
     existing_map = {}
     for rule in existing_rules:
         # Extract hostname from hostnames array
-        hostnames = rule.get('hostnames', [])
-        if not hostnames:
+        hostname = rule.get('PK')
+        if not hostname:
             continue
         
-        hostname = hostnames[0]  # Get first hostname
         # Extract IP from via field
-        ip = rule.get('via', '')
+        ip = rule.get('action', {}).get('via', '')
         
         existing_map[hostname] = {
-            'id': rule.get('PK'),
+            'id': hostname,
             'ip': ip
         }
     
@@ -375,6 +396,11 @@ Examples:
         '--apply',
         action='store_true',
         help='Apply changes to ControlD (default is dry run)'
+    )
+    parser.add_argument(
+        '--debug',
+        action='store_true',
+        help='Enable debug output for HTTP requests'
     )
     
     args = parser.parse_args()
