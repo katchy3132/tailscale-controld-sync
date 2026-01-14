@@ -37,8 +37,3 @@ Backups
 -------
 
 When running in live mode the script saves a timestamped backup JSON file named like `controld_backup_YYYYMMDD_HHMMSS.json` before making changes.
-
-License
--------
-
-Add your preferred license here (e.g., MIT).
