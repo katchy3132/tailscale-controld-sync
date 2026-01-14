@@ -48,8 +48,8 @@ CONTROLD_FOLDER_NAME = 'Tailscale'
 #   - server1.vpn.example.com → 100.64.0.1
 
 DNS_SUFFIXES = [
-    'ts.example.com',
-    'vpn.example.com'
+    'ts',
+    'funny-name.ts.net'
 ]
 
 # Whether to create a record with just the hostname (no suffix)
