@@ -211,7 +211,7 @@ def create_controld_record(hostname: str, ip: str, folder_id: str, dry_run: bool
         'status': 1,  # 1 = enabled
         'do': 2,  # 2 = SPOOF
         'via': ip,  # IP to spoof to
-        'hostnames[]': [hostname]
+        'hostnames': [hostname]
     }
     
     try:
@@ -238,7 +238,7 @@ def update_controld_record(rule_id: str, hostname: str, ip: str, folder_id: str,
         'status': 1,  # 1 = enabled
         'do': 2,  # 2 = SPOOF
         'via': ip,  # IP to spoof to
-        'hostnames[]': [hostname]
+        'hostnames': [hostname]
     }
     
     try:
