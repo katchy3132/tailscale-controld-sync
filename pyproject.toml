@@ -1,0 +1,20 @@
+[project]
+name = "tailscale-controld-sync"
+version = "0.1.0"
+description = "Sync Tailscale hosts/services to ControlD DNS rules"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+    "requests>=2.31.0",
+]
+
+[project.scripts]
+sync = "tailscale_controld_sync:main"
+sync-apply = "tailscale_controld_sync:main_apply"
+
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+py-modules = ["tailscale_controld_sync"]

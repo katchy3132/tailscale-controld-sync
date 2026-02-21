@@ -8,24 +8,40 @@ import requests
 import sys
 import json
 import argparse
+import importlib.util
+from pathlib import Path
 from datetime import datetime
 from typing import List, Dict
  
 # Import configuration
 try:
-    from config import (
-        TAILSCALE_API_KEY,
-        TAILSCALE_TAILNET_ID,
-        CONTROLD_API_TOKEN,
-        CONTROLD_PROFILE_ID,
-        CONTROLD_FOLDER_NAME,
-        DNS_SUFFIXES,
-        CREATE_BARE_HOSTNAME
-    )
-except ImportError:
-    print("Error: config.py not found!")
+    config_path_candidates = [
+        Path.cwd() / 'config.py',
+        Path(__file__).resolve().parent / 'config.py',
+    ]
+    config_path = next((path for path in config_path_candidates if path.exists()), None)
+    if config_path is None:
+        raise FileNotFoundError('config.py not found in current directory or script directory')
+
+    config_spec = importlib.util.spec_from_file_location('local_config', config_path)
+    if config_spec is None or config_spec.loader is None:
+        raise ImportError(f'Unable to load config module from {config_path}')
+
+    config_module = importlib.util.module_from_spec(config_spec)
+    config_spec.loader.exec_module(config_module)
+    LOADED_CONFIG_PATH = str(config_path)
+
+    TAILSCALE_API_KEY = config_module.TAILSCALE_API_KEY
+    TAILSCALE_TAILNET_ID = config_module.TAILSCALE_TAILNET_ID
+    CONTROLD_API_TOKEN = config_module.CONTROLD_API_TOKEN
+    CONTROLD_PROFILE_ID = config_module.CONTROLD_PROFILE_ID
+    CONTROLD_FOLDER_NAME = config_module.CONTROLD_FOLDER_NAME
+    DNS_SUFFIXES = config_module.DNS_SUFFIXES
+    CREATE_BARE_HOSTNAME = config_module.CREATE_BARE_HOSTNAME
+except (FileNotFoundError, ImportError, AttributeError) as e:
+    print(f"Error loading config.py: {e}")
     print("\nPlease create a config.py file with your configuration.")
-    print("You can copy config.example.py and rename it to config.py")
+    print("You can copy config_example.py and rename it to config.py")
     sys.exit(1)
 
 # API endpoints
@@ -290,12 +306,14 @@ def create_backup(existing_rules: List[Dict], folder_id: str):
         return None
 
 
-def sync_dns_records(dry_run: bool = True):
+def sync_dns_records(dry_run: bool = True, quiet: bool = False):
     """Main sync function."""
     mode = "DRY RUN" if dry_run else "LIVE"
-    print(f"Starting Tailscale → ControlD DNS sync ({mode})...\n")
+    if not quiet:
+        print(f"Starting Tailscale → ControlD DNS sync ({mode})...\n")
+        print(f"Using config: {LOADED_CONFIG_PATH}\n")
     
-    if dry_run:
+    if dry_run and not quiet:
         print("ℹ️  Running in DRY RUN mode - no changes will be made")
         print("   Use --apply to actually apply changes\n")
     
@@ -382,14 +400,14 @@ def sync_dns_records(dry_run: bool = True):
         print("\nTo apply these changes, run with --apply flag")
 
 
-if __name__ == '__main__':
+def main():
     parser = argparse.ArgumentParser(
         description='Sync Tailscale nodes to ControlD DNS rules',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog='''
 Examples:
-  python sync_tailscale_controld.py           # Dry run (preview changes)
-  python sync_tailscale_controld.py --apply   # Apply changes to ControlD
+    uv run sync                                 # Dry run (preview changes)
+    uv run sync-apply                           # Apply changes to ControlD
         '''
     )
     parser.add_argument(
@@ -402,6 +420,19 @@ Examples:
         action='store_true',
         help='Enable debug output for HTTP requests'
     )
+    parser.add_argument(
+        '--quiet',
+        action='store_true',
+        help='Suppress startup informational output'
+    )
     
     args = parser.parse_args()
-    sync_dns_records(dry_run=not args.apply)
+    sync_dns_records(dry_run=not args.apply, quiet=args.quiet)
+
+
+def main_apply():
+    sync_dns_records(dry_run=False, quiet=True)
+
+
+if __name__ == '__main__':
+    main()

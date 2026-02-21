@@ -14,23 +14,29 @@ Features
 Quick start
 -----------
 
-1. Copy the example config:
+1. Install dependencies:
+
+```powershell
+uv sync
+```
+
+2. Copy the example config:
 
 ```powershell
 cp config_example.py config.py
 ```
 
-2. Edit `config.py` and set your Tailscale and ControlD credentials and settings.
-3. Preview changes (dry run):
+3. Edit `config.py` and set your Tailscale and ControlD credentials and settings.
+4. Preview changes (dry run):
 
 ```powershell
-python tailscale_controld_sync.py
+uv run tailscale_controld_sync.py
 ```
 
-4. Apply changes:
+5. Apply changes:
 
 ```powershell
-python tailscale_controld_sync.py --apply
+uv run tailscale_controld_sync.py --apply
 ```
 
 Backups
