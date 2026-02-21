@@ -8,7 +8,7 @@ Features
 --------
 
 - Fetches Tailscale devices and services via the Tailscale API and then builds DNS records from device/service names, supporting multiple DNS suffixes and optional bare hostnames.
-- Default dry-run mode. Use  `--apply` to make live changes; `--debug` for verbose HTTP output.
+- Default dry-run mode. Use `--apply` to make live changes; `--debug` for verbose HTTP output; `--quiet` to suppress startup informational output.
 - Creates timestamped JSON backups of existing rules before applying changes (live mode).
 
 Quick start
@@ -27,17 +27,9 @@ cp config_example.py config.py
 ```
 
 3. Edit `config.py` and set your Tailscale and ControlD credentials and settings.
-4. Preview changes (dry run):
-
-```powershell
-uv run tailscale_controld_sync.py
-```
-
-5. Apply changes:
-
-```powershell
-uv run tailscale_controld_sync.py --apply
-```
+4. Run (dry run): `uv run sync` or `python tailscale_controld_sync.py`
+5. Apply changes: `uv run sync --apply` or `python tailscale_controld_sync.py --apply`
+6. Apply in quiet mode (scheduled tasks): `uv run sync --apply --quiet` or `python tailscale_controld_sync.py --apply --quiet`
 
 Backups
 -------

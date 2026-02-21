@@ -10,7 +10,6 @@ dependencies = [
 
 [project.scripts]
 sync = "tailscale_controld_sync:main"
-sync-apply = "tailscale_controld_sync:main_apply"
 
 [build-system]
 requires = ["setuptools>=69"]

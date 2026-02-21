@@ -407,7 +407,8 @@ def main():
         epilog='''
 Examples:
     uv run sync                                 # Dry run (preview changes)
-    uv run sync-apply                           # Apply changes to ControlD
+    uv run sync --apply                         # Apply changes to ControlD
+    uv run sync --apply --quiet                 # Apply changes to ControlD (quiet)
         '''
     )
     parser.add_argument(
@@ -428,10 +429,6 @@ Examples:
     
     args = parser.parse_args()
     sync_dns_records(dry_run=not args.apply, quiet=args.quiet)
-
-
-def main_apply():
-    sync_dns_records(dry_run=False, quiet=True)
 
 
 if __name__ == '__main__':
