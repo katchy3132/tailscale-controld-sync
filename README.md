@@ -1,12 +1,14 @@
 # tailscale-controld-sync
 
-Sync Tailscale hosts and services to ControlD DNS rules.
+Sync Tailscale devices and services into ControlD DNS rules.
 
-Keep ControlD DNS entries in sync with devices and services from a Tailscale tailnet.
+This keeps your ControlD DNS records aligned with what exists in your Tailscale tailnet.
+
+Use case: some clients (for example, browser profiles/containers tied to different endpoints) may not be able to use your local Tailscale DNS resolver. Publishing tailnet host/service names into ControlD makes those names resolvable even when the local resolver isn’t available.
 
 ## Features
 
-- Fetches Tailscale devices and services via the Tailscale API and then builds DNS records from device/service names, supporting multiple DNS suffixes and optional bare hostnames.
+- Fetches Tailscale devices and services via the Tailscale API and builds DNS records from their names (supports multiple DNS suffixes and optional bare hostnames).
 - Default dry-run mode. Use `--apply` to make live changes; `--debug` for verbose HTTP output; `--quiet` to suppress startup informational output.
 - Creates timestamped JSON backups of existing rules before applying changes (live mode).
 
@@ -25,9 +27,9 @@ cp config_example.py config.py
 ```
 
 1. Edit `config.py` and set your Tailscale and ControlD credentials and settings.
-1. Run (dry run): `uv run sync` or `python tailscale_controld_sync.py`
-1. Apply changes: `uv run sync --apply` or `python tailscale_controld_sync.py --apply`
-1. Apply in quiet mode (scheduled tasks): `uv run sync --apply --quiet` or `python tailscale_controld_sync.py --apply --quiet`
+2. Run (dry run): `uv run sync` or `python tailscale_controld_sync.py`
+3. Apply changes: `uv run sync --apply` or `python tailscale_controld_sync.py --apply`
+4. Apply in quiet mode (scheduled tasks): `uv run sync --apply --quiet` or `python tailscale_controld_sync.py --apply --quiet`
 
 ## Backups
 
