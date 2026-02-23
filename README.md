@@ -1,6 +1,6 @@
 # tailscale-controld-sync
 
-Sync Tailscale devices and services into ControlD DNS rules.
+Sync Tailscale devices and services to ControlD DNS rules.
 
 This keeps your ControlD DNS records aligned with what exists in your Tailscale tailnet.
 
