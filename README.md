@@ -6,6 +6,10 @@ This keeps your ControlD DNS records aligned with what exists in your Tailscale 
 
 Use case: some clients (for example, browser profiles/containers tied to different endpoints) may not be able to use your local Tailscale DNS resolver. Publishing tailnet host/service names into ControlD makes those names resolvable even when the local resolver isn’t available.
 
+a Client Specific ControlD Resolver for DNS-over-HTTPS (DoH) looks like : `https://dns.controld.com/abcd1234/name-goes-here`
+
+see more here : https://docs.controld.com/docs/device-clients
+
 ## Features
 
 - Fetches Tailscale devices and services via the Tailscale API and builds DNS records from their names (supports multiple DNS suffixes and optional bare hostnames).
