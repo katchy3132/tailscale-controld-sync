@@ -6,9 +6,10 @@ This keeps your ControlD DNS records aligned with what exists in your Tailscale 
 
 Use case: some clients (for example, browser profiles/containers tied to different endpoints) may not be able to use your local Tailscale DNS resolver. Publishing tailnet host/service names into ControlD makes those names resolvable even when the local resolver isn’t available.
 
-a Client Specific ControlD Resolver for DNS-over-HTTPS (DoH) looks like : `https://dns.controld.com/abcd1234/name-goes-here`
+A client-specific Control D resolver for DNS-over-HTTPS (DoH) looks like:
+`https://dns.controld.com/abcd1234/name-goes-here`
 
-see more here : https://docs.controld.com/docs/device-clients
+See the [Control D device clients documentation](https://docs.controld.com/docs/device-clients) for details.
 
 ## Features
 
@@ -18,22 +19,57 @@ see more here : https://docs.controld.com/docs/device-clients
 
 ## Quick start
 
+The project requires Python 3.10 or newer. The examples below use [uv](https://docs.astral.sh/uv/).
+
 1. Install dependencies:
 
 ```powershell
 uv sync
 ```
 
-1. Copy the example config:
+2. Copy the example config:
 
 ```powershell
 cp config_example.py config.py
 ```
 
-1. Edit `config.py` and set your Tailscale and ControlD credentials and settings.
-2. Run (dry run): `uv run sync` or `python tailscale_controld_sync.py`
-3. Apply changes: `uv run sync --apply` or `python tailscale_controld_sync.py --apply`
-4. Apply in quiet mode (scheduled tasks): `uv run sync --apply --quiet` or `python tailscale_controld_sync.py --apply --quiet`
+3. Edit `config.py` and set:
+
+   - `TAILSCALE_API_KEY` and `TAILSCALE_TAILNET_ID`
+   - `CONTROLD_API_TOKEN` and `CONTROLD_PROFILE_ID`
+   - `CONTROLD_FOLDER_NAME`, `DNS_SUFFIXES`, and `CREATE_BARE_HOSTNAME`
+
+4. Preview changes in the default dry-run mode:
+
+```powershell
+uv run sync
+```
+
+You can also run the module directly:
+
+```powershell
+python tailscale_controld_sync.py
+```
+
+5. Apply changes to Control D:
+
+```powershell
+uv run sync --apply
+```
+
+Or:
+
+```powershell
+python tailscale_controld_sync.py --apply
+```
+
+6. For scheduled tasks, suppress startup messages with `--quiet`:
+
+```powershell
+uv run sync --apply --quiet
+```
+
+Use `--debug` to log HTTP methods, URLs, timeouts, and redacted request headers. API credentials are never included in debug logs.
 
 ## Backups
 

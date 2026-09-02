@@ -4,6 +4,9 @@ Sync Tailscale nodes to ControlD DNS records.
 This script fetches all Tailscale nodes and creates/updates DNS records in ControlD.
 """
 
+import ipaddress
+import logging
+import re
 import requests
 import sys
 import json
@@ -14,6 +17,18 @@ from datetime import datetime
 from typing import List, Dict
 
 REQUEST_TIMEOUT = (10, 30)
+LOGGER = logging.getLogger(__name__)
+DNS_SUFFIXES = []
+CREATE_BARE_HOSTNAME = False
+LOADED_CONFIG_PATH = None
+
+
+def redact_headers(headers: Dict[str, str]) -> Dict[str, str]:
+    """Return headers safe for debug logging."""
+    return {
+        key: '[REDACTED]' if key.lower() == 'authorization' else value
+        for key, value in headers.items()
+    }
 
 
 def get_config_path() -> Path:
@@ -24,14 +39,43 @@ def get_config_path() -> Path:
 def request(method: str, url: str, **kwargs):
     """Make an HTTP request with a bounded connect and read timeout."""
     kwargs.setdefault('timeout', REQUEST_TIMEOUT)
+    LOGGER.debug(
+        'HTTP %s %s headers=%s timeout=%s',
+        method.upper(),
+        url,
+        redact_headers(kwargs.get('headers', {})),
+        kwargs['timeout'],
+    )
     return getattr(requests, method)(url, **kwargs)
 
 
-# Import configuration
-try:
+def response_json(response, context: str) -> Dict:
+    """Decode an API response and require a JSON object."""
+    try:
+        payload = response.json()
+    except ValueError as exc:
+        raise ValueError(f'Invalid JSON from {context}') from exc
+    if not isinstance(payload, dict):
+        raise ValueError(f'Unexpected JSON shape from {context}')
+    return payload
+
+
+TAILSCALE_API_KEY = None
+TAILSCALE_TAILNET_ID = None
+CONTROLD_API_TOKEN = None
+CONTROLD_PROFILE_ID = None
+CONTROLD_FOLDER_NAME = None
+
+
+def load_config() -> None:
+    """Load configuration from the trusted path next to this script."""
+    global TAILSCALE_API_KEY, TAILSCALE_TAILNET_ID, CONTROLD_API_TOKEN
+    global CONTROLD_PROFILE_ID, CONTROLD_FOLDER_NAME, DNS_SUFFIXES
+    global CREATE_BARE_HOSTNAME, LOADED_CONFIG_PATH
+
     config_path = get_config_path()
-    if config_path is None:
-        raise FileNotFoundError('config.py not found in current directory or script directory')
+    if not config_path.exists():
+        raise FileNotFoundError(f'config.py not found at {config_path}')
 
     config_spec = importlib.util.spec_from_file_location('local_config', config_path)
     if config_spec is None or config_spec.loader is None:
@@ -48,11 +92,6 @@ try:
     CONTROLD_FOLDER_NAME = config_module.CONTROLD_FOLDER_NAME
     DNS_SUFFIXES = config_module.DNS_SUFFIXES
     CREATE_BARE_HOSTNAME = config_module.CREATE_BARE_HOSTNAME
-except (FileNotFoundError, ImportError, AttributeError) as e:
-    print(f"Error loading config.py: {e}")
-    print("\nPlease create a config.py file with your configuration.")
-    print("You can copy config_example.py and rename it to config.py")
-    sys.exit(1)
 
 # API endpoints
 TAILSCALE_API_BASE = 'https://api.tailscale.com/api/v2'
@@ -70,7 +109,8 @@ def validate_config():
     
     missing = []
     for name, value in required_vars.items():
-        if not value or value.startswith('your-') or value.startswith('tskey-api-xxxxx'):
+        if (not isinstance(value, str) or not value.strip()
+                or value.startswith('your-') or value.startswith('tskey-api-xxxxx')):
             missing.append(name)
     
     if missing:
@@ -78,6 +118,50 @@ def validate_config():
         for var in missing:
             print(f"  - {var}")
         sys.exit(1)
+
+
+def is_valid_ip(value: str) -> bool:
+    """Return whether value is a valid IPv4 or IPv6 address."""
+    try:
+        ipaddress.ip_address(value)
+        return True
+    except ValueError:
+        return False
+
+
+def is_valid_hostname(value: str) -> bool:
+    """Return whether value is a conventional DNS hostname."""
+    if not isinstance(value, str) or len(value) > 253:
+        return False
+    value = value.rstrip('.')
+    labels = value.split('.')
+    return bool(labels and all(
+        re.fullmatch(r'[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?', label)
+        for label in labels
+    ))
+
+
+def build_existing_rules_map(rules: List[Dict]) -> Dict[str, Dict]:
+    """Index ControlD rules by hostname while preserving each rule ID."""
+    existing_map = {}
+    for rule in rules:
+        rule_id = rule.get('PK')
+        hostnames = rule.get('hostnames') or []
+        if not hostnames and isinstance(rule_id, str):
+            # ControlD's list response uses PK as the hostname for these rules.
+            hostnames = [rule_id]
+        if not rule_id or not isinstance(hostnames, list):
+            continue
+
+        rule_info = {
+            'id': rule_id,
+            'ip': rule.get('action', {}).get('via', ''),
+            'hostnames': hostnames,
+        }
+        for hostname in hostnames:
+            if isinstance(hostname, str) and hostname:
+                existing_map[hostname] = rule_info
+    return existing_map
 
 
 def get_tailscale_nodes() -> List[Dict]:
@@ -88,10 +172,10 @@ def get_tailscale_nodes() -> List[Dict]:
     try:
         response = request('get', url, headers=headers)
         response.raise_for_status()
-        devices = response.json().get('devices', [])
+        devices = response_json(response, 'Tailscale devices').get('devices', [])
         print(f"✓ Found {len(devices)} Tailscale nodes")
         return devices
-    except requests.exceptions.RequestException as e:
+    except (requests.exceptions.RequestException, ValueError) as e:
         print(f"Error fetching Tailscale nodes: {e}")
         sys.exit(1)
 
@@ -104,7 +188,7 @@ def get_tailscale_services() -> List[Dict]:
     try:
         response = request('get', url, headers=headers)
         response.raise_for_status()
-        services = response.json().get('vipServices', [])
+        services = response_json(response, 'Tailscale services').get('vipServices', [])
         print(f"✓ Found {len(services)} Tailscale services ")
         for svc in services:
             orig_name = svc.get('name', '')
@@ -114,7 +198,7 @@ def get_tailscale_services() -> List[Dict]:
             addr = addrs[0] if addrs else ''
             # print(f"  Service: {svc.get('name')} -> {addr}")
         return services
-    except requests.exceptions.RequestException as e:
+    except (requests.exceptions.RequestException, ValueError) as e:
         print(f"Error fetching Tailscale services: {e}")
         sys.exit(1)
 
@@ -134,9 +218,12 @@ def get_tailscale_records() -> Dict[str, str]:
     for node in tailscale_nodes:
         raw_name = node.get('name', '')
         device_name = raw_name.split('.', 1)[0].lower() if raw_name else ''
-        ip = node.get('addresses', [''])[0]  # Get first IP (usually IPv4)
+        addresses = node.get('addresses') or []
+        ip = addresses[0] if addresses else ''  # Get first IP (usually IPv4)
 
-        if not device_name or not ip:
+        if (not device_name or not ip or not is_valid_hostname(device_name)
+                or not is_valid_ip(ip)):
+            LOGGER.warning('Skipping invalid node record name=%r ip=%r', device_name, ip)
             continue
 
         if CREATE_BARE_HOSTNAME:
@@ -144,9 +231,13 @@ def get_tailscale_records() -> Dict[str, str]:
 
         for suffix in DNS_SUFFIXES:
             suffix = suffix.strip()
-            if suffix:
-                fqdn = f"{device_name}.{suffix}"
+            if not suffix:
+                continue
+            fqdn = f"{device_name}.{suffix}"
+            if is_valid_hostname(fqdn):
                 desired_records[fqdn] = ip
+            else:
+                LOGGER.warning('Skipping invalid node hostname %r', fqdn)
 
     # Add services
     for service in tailscale_services:
@@ -154,7 +245,9 @@ def get_tailscale_records() -> Dict[str, str]:
         addrs = service.get('addrs', [])
         ip = addrs[0] if addrs else ''
 
-        if not service_name or not ip:
+        if (not service_name or not ip or not is_valid_hostname(service_name)
+                or not is_valid_ip(ip)):
+            LOGGER.warning('Skipping invalid service record name=%r ip=%r', service_name, ip)
             continue
 
         if CREATE_BARE_HOSTNAME:
@@ -164,7 +257,10 @@ def get_tailscale_records() -> Dict[str, str]:
             suffix = suffix.strip()
             if suffix:
                 fqdn = f"{service_name}.{suffix}"
-                desired_records[fqdn] = ip
+                if is_valid_hostname(fqdn):
+                    desired_records[fqdn] = ip
+                else:
+                    LOGGER.warning('Skipping invalid service hostname %r', fqdn)
 
     return desired_records
 
@@ -177,11 +273,11 @@ def get_controld_records(folder_id: str) -> List[Dict]:
     try:
         response = request('get', url, headers=headers)
         response.raise_for_status()
-        rules = response.json().get('body', {}).get('rules', [])
+        rules = response_json(response, 'ControlD rules').get('body', {}).get('rules', [])
         
         print(f"✓ Found {len(rules)} existing rules in ControlD '{CONTROLD_FOLDER_NAME}' folder")
         return rules
-    except requests.exceptions.RequestException as e:
+    except (requests.exceptions.RequestException, ValueError) as e:
         print(f"Error fetching ControlD rules: {e}")
         sys.exit(1)
 
@@ -195,13 +291,15 @@ def get_or_create_controld_rules_folder() -> str:
         # Get existing folders
         response = request('get', url, headers=headers)
         response.raise_for_status()
-        groups = response.json().get('body', {}).get('groups', [])
+        groups = response_json(response, 'ControlD groups').get('body', {}).get('groups', [])
 
         # Check if folder exists. ControlD response uses 'group' for the name.
         for group in groups:
             group_name = group.get('group') or group.get('name') or ''
             if group_name and group_name.lower() == CONTROLD_FOLDER_NAME.lower():
                 pk = group.get('PK')
+                if not pk:
+                    raise ValueError('ControlD folder has no folder ID')
                 print(f"✓ Found existing folder: {CONTROLD_FOLDER_NAME}")
                 return pk
 
@@ -215,10 +313,12 @@ def get_or_create_controld_rules_folder() -> str:
             json={'group': CONTROLD_FOLDER_NAME}
         )
         response.raise_for_status()
-        folder_id = response.json().get('body', {}).get('folder', {}).get('PK')
+        folder_id = response_json(response, 'ControlD folder creation').get('body', {}).get('folder', {}).get('PK')
+        if not folder_id:
+            raise ValueError('ControlD folder creation returned no folder ID')
         print(f"✓ Created folder: {CONTROLD_FOLDER_NAME}")
         return folder_id
-    except requests.exceptions.RequestException as e:
+    except (requests.exceptions.RequestException, ValueError) as e:
         print(f"Error getting/creating folder: {e}")
         sys.exit(1)
 
@@ -250,7 +350,8 @@ def create_controld_record(hostname: str, ip: str, folder_id: str, dry_run: bool
         return False
 
 
-def update_controld_record(rule_id: str, hostname: str, ip: str, folder_id: str, dry_run: bool = False) -> bool:
+def update_controld_record(rule_id: str, hostname: str, ip: str, folder_id: str,
+                           dry_run: bool = False, hostnames: List[str] = None) -> bool:
     """Update an existing DNS rule in ControlD."""
     if dry_run:
         return True
@@ -265,7 +366,7 @@ def update_controld_record(rule_id: str, hostname: str, ip: str, folder_id: str,
         'status': 1,  # 1 = enabled
         'do': 2,  # 2 = SPOOF
         'via': ip,  # IP to spoof to
-        'hostnames': [hostname]
+        'hostnames': hostnames or [hostname]
     }
     
     try:
@@ -319,6 +420,14 @@ def create_backup(existing_rules: List[Dict], folder_id: str):
 
 def sync_dns_records(dry_run: bool = True, quiet: bool = False):
     """Main sync function."""
+    try:
+        load_config()
+    except (FileNotFoundError, ImportError, AttributeError) as e:
+        print(f"Error loading config.py: {e}")
+        print("\nPlease create a config.py file with your configuration.")
+        print("You can copy config_example.py and rename it to config.py")
+        raise SystemExit(1)
+
     mode = "DRY RUN" if dry_run else "LIVE"
     if not quiet:
         print(f"Starting Tailscale → ControlD DNS sync ({mode})...\n")
@@ -353,20 +462,7 @@ def sync_dns_records(dry_run: bool = True, quiet: bool = False):
     #     print(f"  • {hostname} → {ip}")
     
     # Build map of existing rules in our folder
-    existing_map = {}
-    for rule in existing_rules:
-        # Extract hostname from hostnames array
-        hostname = rule.get('PK')
-        if not hostname:
-            continue
-        
-        # Extract IP from via field
-        ip = rule.get('action', {}).get('via', '')
-        
-        existing_map[hostname] = {
-            'id': hostname,
-            'ip': ip
-        }
+    existing_map = build_existing_rules_map(existing_rules)
     
     # Sync records
     created = 0
@@ -380,7 +476,9 @@ def sync_dns_records(dry_run: bool = True, quiet: bool = False):
         if hostname in existing_map:
             existing_rule = existing_map[hostname]
             if existing_rule['ip'] != ip:
-                if update_controld_record(existing_rule['id'], hostname, ip, folder_id, dry_run):
+                if update_controld_record(
+                        existing_rule['id'], hostname, ip, folder_id, dry_run,
+                        existing_rule['hostnames']):
                     print(f"  ↻ Updated: {hostname} → {ip}")
                     updated += 1
             else:
@@ -439,6 +537,10 @@ Examples:
     )
     
     args = parser.parse_args()
+    logging.basicConfig(
+        level=logging.DEBUG if args.debug else logging.INFO,
+        format='%(levelname)s: %(message)s',
+    )
     sync_dns_records(dry_run=not args.apply, quiet=args.quiet)
 
 
