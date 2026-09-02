@@ -12,14 +12,24 @@ import importlib.util
 from pathlib import Path
 from datetime import datetime
 from typing import List, Dict
- 
+
+REQUEST_TIMEOUT = (10, 30)
+
+
+def get_config_path() -> Path:
+    """Return the configuration path next to this script."""
+    return Path(__file__).resolve().parent / 'config.py'
+
+
+def request(method: str, url: str, **kwargs):
+    """Make an HTTP request with a bounded connect and read timeout."""
+    kwargs.setdefault('timeout', REQUEST_TIMEOUT)
+    return getattr(requests, method)(url, **kwargs)
+
+
 # Import configuration
 try:
-    config_path_candidates = [
-        Path.cwd() / 'config.py',
-        Path(__file__).resolve().parent / 'config.py',
-    ]
-    config_path = next((path for path in config_path_candidates if path.exists()), None)
+    config_path = get_config_path()
     if config_path is None:
         raise FileNotFoundError('config.py not found in current directory or script directory')
 
@@ -76,7 +86,7 @@ def get_tailscale_nodes() -> List[Dict]:
     headers = {'Authorization': f'Bearer {TAILSCALE_API_KEY}'}
     
     try:
-        response = requests.get(url, headers=headers)
+        response = request('get', url, headers=headers)
         response.raise_for_status()
         devices = response.json().get('devices', [])
         print(f"✓ Found {len(devices)} Tailscale nodes")
@@ -92,7 +102,7 @@ def get_tailscale_services() -> List[Dict]:
     headers = {'Authorization': f'Bearer {TAILSCALE_API_KEY}'}
 
     try:
-        response = requests.get(url, headers=headers)
+        response = request('get', url, headers=headers)
         response.raise_for_status()
         services = response.json().get('vipServices', [])
         print(f"✓ Found {len(services)} Tailscale services ")
@@ -165,7 +175,7 @@ def get_controld_records(folder_id: str) -> List[Dict]:
     headers = {'Authorization': f'Bearer {CONTROLD_API_TOKEN}'}
     
     try:
-        response = requests.get(url, headers=headers)
+        response = request('get', url, headers=headers)
         response.raise_for_status()
         rules = response.json().get('body', {}).get('rules', [])
         
@@ -183,7 +193,7 @@ def get_or_create_controld_rules_folder() -> str:
     
     try:
         # Get existing folders
-        response = requests.get(url, headers=headers)
+        response = request('get', url, headers=headers)
         response.raise_for_status()
         groups = response.json().get('body', {}).get('groups', [])
 
@@ -198,7 +208,8 @@ def get_or_create_controld_rules_folder() -> str:
         # Create folder if it doesn't exist
         print(f"Creating folder: {CONTROLD_FOLDER_NAME}")
         # ControlD expects 'group' when creating a folder
-        response = requests.post(
+        response = request(
+            'post',
             url,
             headers={**headers, 'Content-Type': 'application/json'},
             json={'group': CONTROLD_FOLDER_NAME}
@@ -231,7 +242,7 @@ def create_controld_record(hostname: str, ip: str, folder_id: str, dry_run: bool
     }
     
     try:
-        response = requests.post(url, headers=headers, json=data)
+        response = request('post', url, headers=headers, json=data)
         response.raise_for_status()
         return True
     except requests.exceptions.RequestException as e:
@@ -258,7 +269,7 @@ def update_controld_record(rule_id: str, hostname: str, ip: str, folder_id: str,
     }
     
     try:
-        response = requests.put(url, headers=headers, json=data)
+        response = request('put', url, headers=headers, json=data)
         response.raise_for_status()
         return True
     except requests.exceptions.RequestException as e:
@@ -275,7 +286,7 @@ def delete_controld_record(rule_id: str, hostname: str, dry_run: bool = False) -
     headers = {'Authorization': f'Bearer {CONTROLD_API_TOKEN}'}
     
     try:
-        response = requests.delete(url, headers=headers)
+        response = request('delete', url, headers=headers)
         response.raise_for_status()
         return True
     except requests.exceptions.RequestException as e:

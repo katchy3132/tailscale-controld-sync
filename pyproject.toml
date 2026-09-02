@@ -3,9 +3,9 @@ name = "tailscale-controld-sync"
 version = "0.1.6"
 description = "Sync Tailscale hosts/services to ControlD DNS rules"
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 dependencies = [
-    "requests>=2.31.0",
+    "requests>=2.34.2,<3",
 ]
 
 [project.scripts]
